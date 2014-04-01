@@ -85,7 +85,9 @@ krb5_k_verify_checksum
 krb5_k_verify_checksum_iov
 mit_crc32
 krb5int_aes_encrypt
+krb5int_aes_gcm_encrypt
 krb5int_aes_decrypt
+krb5int_aes_gcm_decrypt
 krb5int_enc_des3
 krb5int_arcfour_gsscrypt
 krb5int_camellia_cbc_mac

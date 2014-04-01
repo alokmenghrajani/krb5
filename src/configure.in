@@ -187,6 +187,7 @@ builtin)
   ;;
 openssl)
   AC_CHECK_LIB(crypto, PKCS7_get_signer_info)
+  AC_DEFINE(CRYPTO_IMPL_OPENSSL,1,[Define if crypto implementation is openssl])
   ;;
 nss)
   if test "${CRYPTO_IMPL_CFLAGS+set}" != set; then

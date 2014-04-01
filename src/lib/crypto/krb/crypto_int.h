@@ -182,6 +182,8 @@ unsigned int krb5int_dk_crypto_length(const struct krb5_keytypes *ktp,
                                       krb5_cryptotype type);
 unsigned int krb5int_aes_crypto_length(const struct krb5_keytypes *ktp,
                                        krb5_cryptotype type);
+unsigned int krb5int_aes_gcm_crypto_length(const struct krb5_keytypes *ktp,
+                                           krb5_cryptotype type);
 unsigned int krb5int_camellia_crypto_length(const struct krb5_keytypes *ktp,
                                             krb5_cryptotype type);
 
@@ -203,6 +205,10 @@ krb5_error_code krb5int_dk_encrypt(const struct krb5_keytypes *ktp,
                                    krb5_key key, krb5_keyusage usage,
                                    const krb5_data *ivec,
                                    krb5_crypto_iov *data, size_t num_data);
+krb5_error_code krb5int_dk_gcm_encrypt(const struct krb5_keytypes *ktp,
+                                       krb5_key key, krb5_keyusage usage,
+                                       const krb5_data *ivec,
+                                       krb5_crypto_iov *data, size_t num_data);
 krb5_error_code krb5int_dk_cmac_encrypt(const struct krb5_keytypes *ktp,
                                         krb5_key key, krb5_keyusage usage,
                                         const krb5_data *ivec,
@@ -227,6 +233,10 @@ krb5_error_code krb5int_dk_decrypt(const struct krb5_keytypes *ktp,
                                    krb5_key key, krb5_keyusage usage,
                                    const krb5_data *ivec,
                                    krb5_crypto_iov *data, size_t num_data);
+krb5_error_code krb5int_dk_gcm_decrypt(const struct krb5_keytypes *ktp,
+                                       krb5_key key, krb5_keyusage usage,
+                                       const krb5_data *ivec,
+                                       krb5_crypto_iov *data, size_t num_data);
 krb5_error_code krb5int_dk_cmac_decrypt(const struct krb5_keytypes *ktp,
                                         krb5_key key, krb5_keyusage usage,
                                         const krb5_data *ivec,
@@ -423,6 +433,7 @@ extern const struct krb5_enc_provider krb5int_enc_aes128;
 extern const struct krb5_enc_provider krb5int_enc_aes256;
 extern const struct krb5_enc_provider krb5int_enc_aes128_ctr;
 extern const struct krb5_enc_provider krb5int_enc_aes256_ctr;
+extern const struct krb5_enc_provider krb5int_enc_aes256_gcm;
 extern const struct krb5_enc_provider krb5int_enc_camellia128;
 extern const struct krb5_enc_provider krb5int_enc_camellia256;
 
@@ -465,8 +476,12 @@ krb5_error_code krb5int_pbkdf2_hmac_sha1(const krb5_data *out,
  * the AES and Camellia enc providers. */
 krb5_error_code krb5int_aes_encrypt(krb5_key key, const krb5_data *ivec,
                                     krb5_crypto_iov *data, size_t num_data);
+krb5_error_code krb5int_aes_gcm_encrypt(krb5_key key, const krb5_data *ivec,
+                                        krb5_crypto_iov *data, size_t num_data);
 krb5_error_code krb5int_aes_decrypt(krb5_key key, const krb5_data *ivec,
                                     krb5_crypto_iov *data, size_t num_data);
+krb5_error_code krb5int_aes_gcm_decrypt(krb5_key key, const krb5_data *ivec,
+                                        krb5_crypto_iov *data, size_t num_data);
 krb5_error_code krb5int_camellia_cbc_mac(krb5_key key,
                                          const krb5_crypto_iov *data,
                                          size_t num_data, const krb5_data *iv,

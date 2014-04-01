@@ -1,0 +1,188 @@
+
+                Galois Counter Mode (GCM) for Kerberos 5
+
+Abstract
+
+   This document specifies an encryption type and a corresponding
+   checksum type for the Kerberos cryptosystem framework defined in RFC
+   3961.  The new type uses the Advanced Encryption Standard (AES) block
+   cipher in Galois Counter Mode (GCM) mode.
+
+   The authors feel that GCM is a better choice for Kerberos for two
+   reasons:
+   1. AES-GCM is more efficient than AES-HMAC-SHA1
+   2. AES-GCM should provide provable-security
+
+Status of This Memo
+
+   This document is a draft, written by Alok Menghrajani.
+
+Copyright Notice
+
+   TODO
+
+1.  Introduction
+
+   This document specific Advanced Encryption Standard (AES) block
+   cipher in Galois Counter Mode (GCM).  Kerberos does support Advanced
+   Encryption Standard (AES) block cipher with HMAC-SHA1, described in
+   described in [RFC3962].
+
+   AES has a 128-bit block size and key sizes of 128-bit or 256-bit.
+   This document specific Kerberos encryption and checksum types for
+   256-bit keys.  The new type conform to the framework specified in
+   [RFC3961].
+
+   TODO: what about simplified profiles?
+
+   Like for AES-HMAC-SHA1, the new type uses key derivation to produce
+   a key for encryption. GCM is an authenticated encryption mode, there
+   is therefore no need to derive a key for integrity protection or for
+   checksum operations.  Instead of the key derivation function
+   described in [RFC3961], Section 5.1, the new type uses a key
+   derivation function from the family specified in [SP800-108].
+
+   GCM is a counter mode, there is therefore no need to pad the data or
+   to implement a scheme like ciphertext stealing.
+
+   Our initial work shows that aes256-gcm can encrypt/decrypt roughly
+   1.7x more data than aes256-cts-hmac-sha1-96 on a single machine.
+
+2.  Protocol Key Representation
+
+   The AES key space is dense, so we use random octet strings
+   directly as keys.  The first bit of the Camellia bit string is the
+   high bit of the first byte of the random octet string.
+
+3.  Key Derivation
+
+   TODO: figure out what we want to do for key derivation. I think
+   we should follow Camellia's choice from [RFC6803].
+
+4.  Key Generation from Strings
+
+   TODO: figure out what we want to do for key generation from strings.
+   Again, I think we should follow Camellia's choice.
+
+5.  Encryption Algorithm Parameters
+
+   The following parameters, required by [RFC3961], Section 3, apply to
+   the encryption types aes256-gcm, which uses a 256-bit
+   protocol key.
+
+   Protocol key format: as defined in Section 2.
+
+   Specific key structure: three protocol format keys: { Kc, Ke, Ki }.
+
+   Required checksum mechanism: as defined in Section 7.
+
+   Key generation seed length: the key size (256 bits).
+
+   String-to-key function: as defined in Section 4.
+
+   Random-to-key function: identity function.
+
+   Key-derivation function: as indicated below, with usage represented
+   as 4 octets in big-endian order.
+
+   String-to-key parameter format: 4 octets indicating a 32-bit
+   iteration count in big-endian order.  Implementations may limit the
+   count as specified in [RFC3962], Section 4.
+
+   Default string-to-key parameters: 00 00 80 00.
+
+   Kc = KDF-FEEDBACK-CMAC(base-key, usage | 0x99)
+   Ke = KDF-FEEDBACK-CMAC(base-key, usage | 0xAA)
+   Ki = KDF-FEEDBACK-CMAC(base-key, usage | 0x55)
+
+   Cipher state: a 128-bit CBC initialization vector.
+   TODO: is this going to work for us?
+
+   Initial cipher state: all bits zero.
+
+   Encryption function: as follows, where E() is AES encryption in
+   GCM mode.
+
+   conf = Random string of 128 bits
+   (C, newstate) = E(Ke, conf | plaintext, oldstate)
+   ciphertext = C | Tag
+
+   Decryption function: as follows, where D() is AES decryption in
+   GCM mode, with the ivec treated as in E().  To separate the
+   ciphertext into C and Tag components, use the final 16 bytes for Tag and
+   all of the preceding bytes for C.
+
+   (C, Tag) = ciphertext
+   (P, newIV) = D(Ke, C, oldstate)
+   newstate = newIV
+
+   Pseudo-random function: as follows.
+
+   Kp = KDF-FEEDBACK-CMAC(protocol-key, "prf")
+   PRF = CMAC(Kp, octet-string)
+
+6.  Security Considerations
+
+   TODO: figure out what to put here. I was told about the IV reuse concern.
+
+   It might be worth talking about Provable security. The following pdf might be worth
+   referencing:
+   http://www.cs.washington.edu/research/projects/poirot3/Oakland/sp/PAPERS/oakland07-24.pdf
+
+7.  IANA Considerations
+
+   TODO: Figure out if we need a placeholder checksum (to fit the existing framework).
+
+8.  Test Vectors
+
+   TODO. See http://csrc.nist.gov/groups/STM/cavp/documents/mac/gcmtestvectors.zip
+
+9.  References
+
+9.1.  Normative References
+
+   [RFC3713]    Matsui, M., Nakajima, J., and S. Moriai, "A Description
+                of the Camellia Encryption Algorithm", RFC 3713,
+                April 2004.
+
+   [RFC3961]    Raeburn, K., "Encryption and Checksum Specifications for
+                Kerberos 5", RFC 3961, February 2005.
+
+   [RFC3962]    Raeburn, K., "Advanced Encryption Standard (AES)
+                Encryption for Kerberos 5", RFC 3962, February 2005.
+
+   [SP800-108]  Chen, L., "Recommendation for Key Derivation Using
+                Pseudorandom Functions", NIST Special Publication 800&
+                nhby;108, October 2009.
+
+   [SP800-38B]  Dworkin, M., "Recommendation for Block Cipher Modes of
+                Operation: The CMAC Mode for Authentication", NIST
+                Special Publication 800-38B, October 2009.
+
+9.2.  Informative References
+
+   [CRYPTOENG]  Schneier, B., "Cryptography Engineering", March 2010.
+
+   [CRYPTREC]   Information-technology Promotion Agency (IPA), Japan,
+                "Cryptography Research and Evaluation Committees",
+                <http://www.ipa.go.jp/security/enc/CRYPTREC/
+                index-e.html>.
+
+   [LNCS5867]   Mala, H., Shakiba, M., Dakhilalian, M., and G.
+                Bagherikaram, "New Results on Impossible Different
+                Cryptanalysis of Reduced-Round Camellia-128", Lecture
+                Notes in Computer Science, Vol. 5867, November 2009,
+                <http://www.springerlink.com/content/e55783u422436g77/>.
+
+   [NESSIE]     The NESSIE Project, "New European Schemes for
+                Signatures, Integrity, and Encryption",
+                <http://www.cosic.esat.kuleuven.be/nessie/>.
+
+                TODO: look into this?
+                http://www.cs.washington.edu/research/projects/poirot3/Oakland/sp/PAPERS/oakland07-24.pdf
+
+Appendix A.  Acknowledgements
+
+   TODO: get permission to thank the people who worked with me on this.
+
+

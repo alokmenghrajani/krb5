@@ -95,6 +95,14 @@ const struct krb5_cksumtypes krb5int_cksumtypes_list[] = {
       krb5int_dk_checksum, NULL,
       20, 12, 0 },
 
+#ifdef CRYPTO_IMPL_OPENSSL
+    { CKSUMTYPE_AES256_GCM,
+      "aes256-gcm", { 0 }, "AES256 GCM key",
+      &krb5int_enc_aes256_gcm, &krb5int_hash_sha1,
+      krb5int_dk_checksum, NULL,
+      20, 12, 0 },
+#endif
+
     { CKSUMTYPE_MD5_HMAC_ARCFOUR,
       "md5-hmac-rc4", { 0 }, "Microsoft MD5 HMAC",
       &krb5int_enc_arcfour, &krb5int_hash_md5,

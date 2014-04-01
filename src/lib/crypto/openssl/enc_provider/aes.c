@@ -42,10 +42,23 @@ cts_encr(krb5_key key, const krb5_data *ivec, krb5_crypto_iov *data,
 static krb5_error_code
 cts_decr(krb5_key key, const krb5_data *ivec, krb5_crypto_iov *data,
          size_t num_data, size_t dlen);
+static krb5_error_code
+gcm_encr(krb5_key key, const krb5_data *ivec, krb5_crypto_iov *data,
+         size_t num_data);
+static krb5_error_code
+gcm_decr(krb5_key key, const krb5_data *ivec, krb5_crypto_iov *data,
+         size_t num_data);
 
 #define BLOCK_SIZE 16
 #define NUM_BITS 8
 #define IV_CTS_BUF_SIZE 16 /* 16 - hardcoded in CRYPTO_cts128_en/decrypt */
+#define TAG_SIZE 16
+
+/**
+ * When we don't want an IV, we just use an array of null bytes.
+ * The IV size for GCM is 96 bits (12 bytes).
+ */
+static const unsigned char gcm_no_iv[12] = { 0x00 };
 
 static const EVP_CIPHER *
 map_mode(unsigned int len)
@@ -221,6 +234,180 @@ cts_decr(krb5_key key, const krb5_data *ivec, krb5_crypto_iov *data,
     return ret;
 }
 
+/* Encrypt using GCM */
+static krb5_error_code
+gcm_encr(krb5_key key, const krb5_data *ivec, krb5_crypto_iov *data,
+         size_t num_data)
+{
+    int             ret = 0, t = 0;
+    size_t          i = 0;
+    EVP_CIPHER_CTX  ciph_ctx;
+    krb5_crypto_iov *tag_data;
+    struct iov_cursor cursor;
+
+    // Create cipher context
+    EVP_CIPHER_CTX_init(&ciph_ctx);
+    ret = EVP_EncryptInit_ex(&ciph_ctx, EVP_aes_256_gcm(), NULL, key->keyblock.contents, NULL);
+    if (ret == 0) {
+        EVP_CIPHER_CTX_cleanup(&ciph_ctx);
+        return KRB5_CRYPTO_INTERNAL;
+    }
+
+    if (ivec) {
+        /* Initialise IV with ivec */
+        ret = EVP_CIPHER_CTX_ctrl(&ciph_ctx, EVP_CTRL_GCM_SET_IVLEN, ivec->length, NULL);
+        if (ret == 0) {
+            EVP_CIPHER_CTX_cleanup(&ciph_ctx);
+            return KRB5_CRYPTO_INTERNAL;
+        }
+        ret = EVP_EncryptInit_ex(&ciph_ctx, NULL, NULL, NULL, (unsigned char *)ivec->data);
+        if (ret == 0) {
+            EVP_CIPHER_CTX_cleanup(&ciph_ctx);
+            return KRB5_CRYPTO_INTERNAL;
+        }
+    } else {
+        /* Initialise IV to zero */
+        // TODO: maybe we don't need to call EVP_CTRL_GCM_SET_IVLEN in this case?
+        ret = EVP_CIPHER_CTX_ctrl(&ciph_ctx, EVP_CTRL_GCM_SET_IVLEN, sizeof(gcm_no_iv), NULL);
+        if (ret == 0) {
+            EVP_CIPHER_CTX_cleanup(&ciph_ctx);
+            return KRB5_CRYPTO_INTERNAL;
+        }
+        ret = EVP_EncryptInit_ex(&ciph_ctx, NULL, NULL, NULL, gcm_no_iv);
+        if (ret == 0) {
+            EVP_CIPHER_CTX_cleanup(&ciph_ctx);
+            return KRB5_CRYPTO_INTERNAL;
+        }
+    }
+
+    // Encrypt the data in-place
+    for (i=0; i<num_data; i++) {
+        krb5_crypto_iov *iov = &data[i];
+        if (!ENCRYPT_IOV(iov)) {
+            continue;
+        }
+        // Encrypt the data
+        ret = EVP_EncryptUpdate(&ciph_ctx, (unsigned char*)iov->data.data, &t, (unsigned char*)iov->data.data, iov->data.length);
+        if (ret == 0) {
+            // TODO: do we want to use goto statements instead?
+            // TODO: should we zap the iov?
+            EVP_CIPHER_CTX_cleanup(&ciph_ctx);
+            return KRB5_CRYPTO_INTERNAL;
+        }
+        assert(t == (int)iov->data.length);
+    }
+
+    // Finalize, does not actually encrypt anything
+    // TODO: is it ok to pass NULL here?
+    ret = EVP_EncryptFinal_ex(&ciph_ctx, NULL, &t);
+    if (ret == 0) {
+        EVP_CIPHER_CTX_cleanup(&ciph_ctx);
+        return KRB5_CRYPTO_INTERNAL;
+    }
+
+    // Write the TAG
+    // TODO: micro-optimization, save the position of the TRAILER in the loop above
+    tag_data = krb5int_c_locate_iov(data, num_data, KRB5_CRYPTO_TYPE_TRAILER);
+    if (tag_data == NULL) {
+        EVP_CIPHER_CTX_cleanup(&ciph_ctx);
+        return KRB5_CRYPTO_INTERNAL;
+    }
+    assert(tag_data->data.length == TAG_SIZE);
+
+    EVP_CIPHER_CTX_ctrl(&ciph_ctx, EVP_CTRL_GCM_GET_TAG, TAG_SIZE, tag_data->data.data);
+    if (ret == 0) {
+        EVP_CIPHER_CTX_cleanup(&ciph_ctx);
+        return KRB5_CRYPTO_INTERNAL;
+    }
+    
+    // We are done!
+    EVP_CIPHER_CTX_cleanup(&ciph_ctx);
+    return 0;
+}
+
+/* Decrypt using GCM */
+static krb5_error_code
+gcm_decr(krb5_key key, const krb5_data *ivec, krb5_crypto_iov *data,
+         size_t num_data)
+{
+    int               ret = 0, t = 0;
+    size_t            i = 0;
+    EVP_CIPHER_CTX    ciph_ctx;
+    krb5_crypto_iov   *tag_data;
+
+    EVP_CIPHER_CTX_init(&ciph_ctx);
+    ret = EVP_DecryptInit_ex(&ciph_ctx, EVP_aes_256_gcm(), NULL, key->keyblock.contents, NULL);
+    if (ret == 0) {
+        EVP_CIPHER_CTX_cleanup(&ciph_ctx);
+        return KRB5_CRYPTO_INTERNAL;
+    }
+
+    if (ivec) {
+        /* Initialise IV with ivec */
+        ret = EVP_CIPHER_CTX_ctrl(&ciph_ctx, EVP_CTRL_GCM_SET_IVLEN, ivec->length, NULL);
+        if (ret == 0) {
+            EVP_CIPHER_CTX_cleanup(&ciph_ctx);
+            return KRB5_CRYPTO_INTERNAL;
+        }
+        ret = EVP_DecryptInit_ex(&ciph_ctx, NULL, NULL, NULL, (unsigned char *)ivec->data);
+        if (ret == 0) {
+            EVP_CIPHER_CTX_cleanup(&ciph_ctx);
+            return KRB5_CRYPTO_INTERNAL;
+        }
+    } else {
+        /* Initialise IV to zero */
+        // TODO: maybe we don't need to call EVP_CTRL_GCM_SET_IVLEN in this case?
+        ret = EVP_CIPHER_CTX_ctrl(&ciph_ctx, EVP_CTRL_GCM_SET_IVLEN, sizeof(gcm_no_iv), NULL);
+        if (ret == 0) {
+            EVP_CIPHER_CTX_cleanup(&ciph_ctx);
+            return KRB5_CRYPTO_INTERNAL;
+        }
+        ret = EVP_DecryptInit_ex(&ciph_ctx, NULL, NULL, NULL, gcm_no_iv);
+        if (ret == 0) {
+            EVP_CIPHER_CTX_cleanup(&ciph_ctx);
+            return KRB5_CRYPTO_INTERNAL;
+        }
+    }
+
+    // Setup the TAG
+    tag_data = krb5int_c_locate_iov(data, num_data, KRB5_CRYPTO_TYPE_TRAILER);
+    if (tag_data == NULL) {
+        EVP_CIPHER_CTX_cleanup(&ciph_ctx);
+        return KRB5_CRYPTO_INTERNAL;
+    }
+    assert(tag_data->data.length == TAG_SIZE);
+    EVP_CIPHER_CTX_ctrl(&ciph_ctx, EVP_CTRL_GCM_SET_TAG, TAG_SIZE, tag_data->data.data);
+
+    for (i=0; i<num_data; i++) {
+        krb5_crypto_iov *iov = &data[i];
+        if (iov->data.length == 0) {
+            // krb5_k_decrypt adds empty PADDING, so skip it. Also skip anything which has zero length.
+            continue;
+        }
+        if (!ENCRYPT_IOV(iov)) {
+            continue;
+        }
+        // Decrypt the data
+        ret = EVP_DecryptUpdate(&ciph_ctx, (unsigned char*)iov->data.data, &t, (unsigned char*)iov->data.data, iov->data.length);
+        if (ret == 0) {
+            EVP_CIPHER_CTX_cleanup(&ciph_ctx);
+            return KRB5_CRYPTO_INTERNAL;
+        }
+        assert(t == (int)iov->data.length);
+    }
+
+    // Finalize, does not actually do anything besides check the TAG
+    ret = EVP_DecryptFinal_ex(&ciph_ctx, NULL, &t);
+    if (ret == 0) {
+        EVP_CIPHER_CTX_cleanup(&ciph_ctx);
+        return KRB5_CRYPTO_INTERNAL;
+    }
+
+    // We are done!
+    EVP_CIPHER_CTX_cleanup(&ciph_ctx);
+    return 0;
+}
+
 krb5_error_code
 krb5int_aes_encrypt(krb5_key key, const krb5_data *ivec,
                     krb5_crypto_iov *data, size_t num_data)
@@ -261,6 +448,46 @@ krb5int_aes_decrypt(krb5_key key, const krb5_data *ivec,
     return ret;
 }
 
+krb5_error_code
+krb5int_aes_gcm_encrypt(krb5_key key, const krb5_data *ivec,
+                        krb5_crypto_iov *data, size_t num_data)
+{
+    int    ret = 0;
+    size_t input_length, nblocks;
+
+    input_length = iov_total_length(data, num_data, FALSE);
+    nblocks = (input_length + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    if (nblocks == 1) {
+        if (input_length != BLOCK_SIZE)
+            return KRB5_BAD_MSIZE;
+        ret = cbc_enc(key, ivec, data, num_data);
+    } else if (nblocks > 1) {
+        ret = gcm_encr(key, ivec, data, num_data);
+    }
+
+    return ret;
+}
+
+krb5_error_code
+krb5int_aes_gcm_decrypt(krb5_key key, const krb5_data *ivec,
+                        krb5_crypto_iov *data, size_t num_data)
+{
+    int    ret = 0;
+    size_t input_length, nblocks;
+
+    input_length = iov_total_length(data, num_data, FALSE);
+    nblocks = (input_length + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    if (nblocks == 1) {
+        if (input_length != BLOCK_SIZE)
+            return KRB5_BAD_MSIZE;
+        ret = cbc_decr(key, ivec, data, num_data);
+    } else if (nblocks > 1) {
+        ret = gcm_decr(key, ivec, data, num_data);
+    }
+
+    return ret;
+}
+
 static krb5_error_code
 krb5int_aes_init_state (const krb5_keyblock *key, krb5_keyusage usage,
                         krb5_data *state)
@@ -288,6 +515,17 @@ const struct krb5_enc_provider krb5int_enc_aes256 = {
     32, 32,
     krb5int_aes_encrypt,
     krb5int_aes_decrypt,
+    NULL,
+    krb5int_aes_init_state,
+    krb5int_default_free_state,
+    NULL
+};
+
+const struct krb5_enc_provider krb5int_enc_aes256_gcm = {
+    16,
+    32, 32,
+    krb5int_aes_gcm_encrypt,
+    krb5int_aes_gcm_decrypt,
     NULL,
     krb5int_aes_init_state,
     krb5int_default_free_state,

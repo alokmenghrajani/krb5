@@ -65,6 +65,25 @@ krb5int_aes_crypto_length(const struct krb5_keytypes *ktp,
     }
 }
 
+unsigned int
+krb5int_aes_gcm_crypto_length(const struct krb5_keytypes *ktp,
+                          krb5_cryptotype type)
+{
+    switch (type) {
+    case KRB5_CRYPTO_TYPE_HEADER:
+        // The header contains the iv?
+        return ktp->enc->block_size;
+    case KRB5_CRYPTO_TYPE_PADDING:
+        return 0;
+    case KRB5_CRYPTO_TYPE_TRAILER:
+        // The GCM TAG is 16 bytes
+        return 16;
+    default:
+        assert(0 && "invalid cryptotype passed to krb5int_aes_crypto_length");
+        return 0;
+    }
+}
+
 krb5_error_code
 krb5int_dk_encrypt(const struct krb5_keytypes *ktp, krb5_key key,
                    krb5_keyusage usage, const krb5_data *ivec,
@@ -265,5 +284,166 @@ cleanup:
     krb5_k_free_key(NULL, ke);
     krb5_k_free_key(NULL, ki);
     free(cksum);
+    return ret;
+}
+
+/**
+ * Very similar to krb5int_dk_encrypt, except the trailer is left to be filled with
+ * the GCM TAG. 
+ *
+ * TODO: should we generalize this for other AE schemes?
+ */
+krb5_error_code
+krb5int_dk_gcm_encrypt(const struct krb5_keytypes *ktp, krb5_key key,
+                       krb5_keyusage usage, const krb5_data *ivec,
+                       krb5_crypto_iov *data, size_t num_data)
+{
+    const struct krb5_enc_provider *enc = ktp->enc;
+    krb5_error_code ret;
+    unsigned char constantdata[K5CLENGTH];
+    krb5_data d1;
+    krb5_crypto_iov *header, *trailer, *padding;
+    krb5_key ke = NULL;
+    size_t i;
+    unsigned int blocksize, tagsize, plainlen = 0, padsize = 0;
+
+    /* E(Confounder | Plaintext | Pad) | TAG */
+
+    blocksize = ktp->crypto_length(ktp, KRB5_CRYPTO_TYPE_PADDING);
+    tagsize = ktp->crypto_length(ktp, KRB5_CRYPTO_TYPE_TRAILER);
+
+    for (i = 0; i < num_data; i++) {
+        krb5_crypto_iov *iov = &data[i];
+
+        if (iov->flags == KRB5_CRYPTO_TYPE_DATA)
+            plainlen += iov->data.length;
+
+        // TODO: potential micro-optimization by validating the header/trailer
+        // lengths in this loop instead of calling krb5int_c_locate_iov.
+    }
+
+    /* Validate header and trailer lengths. */
+
+    header = krb5int_c_locate_iov(data, num_data, KRB5_CRYPTO_TYPE_HEADER);
+    if (header == NULL || header->data.length < enc->block_size)
+        return KRB5_BAD_MSIZE;
+
+    trailer = krb5int_c_locate_iov(data, num_data, KRB5_CRYPTO_TYPE_TRAILER);
+    if (trailer == NULL || trailer->data.length < tagsize)
+        return KRB5_BAD_MSIZE;
+
+    if (blocksize != 0) {
+        /* Check that the input data is correctly padded. */
+        if (plainlen % blocksize)
+            padsize = blocksize - (plainlen % blocksize);
+    }
+
+    padding = krb5int_c_locate_iov(data, num_data, KRB5_CRYPTO_TYPE_PADDING);
+    if (padsize && (padding == NULL || padding->data.length < padsize))
+        return KRB5_BAD_MSIZE;
+
+    if (padding != NULL) {
+        memset(padding->data.data, 0, padsize);
+        padding->data.length = padsize;
+    }
+
+    /* Derive the keys. */
+
+    d1.data = (char *)constantdata;
+    d1.length = K5CLENGTH;
+
+    store_32_be(usage, constantdata);
+
+    d1.data[4] = 0xAA;
+
+    ret = krb5int_derive_key(enc, key, &ke, &d1, DERIVE_RFC3961);
+    if (ret != 0)
+        goto cleanup;
+
+    d1.data[4] = 0x55;
+
+    /* Generate confounder. */
+
+    header->data.length = enc->block_size;
+
+    ret = krb5_c_random_make_octets(/* XXX */ NULL, &header->data);
+    if (ret != 0)
+        goto cleanup;
+
+    /* Encrypt the plaintext (header | data | padding) */
+    ret = enc->encrypt(ke, ivec, data, num_data);
+    if (ret != 0)
+        goto cleanup;
+
+cleanup:
+    krb5_k_free_key(NULL, ke);
+    return ret;
+}
+
+krb5_error_code
+krb5int_dk_gcm_decrypt(const struct krb5_keytypes *ktp, krb5_key key,
+                       krb5_keyusage usage, const krb5_data *ivec,
+                       krb5_crypto_iov *data, size_t num_data)
+{
+    const struct krb5_enc_provider *enc = ktp->enc;
+    krb5_error_code ret;
+    unsigned char constantdata[K5CLENGTH];
+    krb5_data d1;
+    krb5_crypto_iov *header, *trailer;
+    krb5_key ke = NULL;
+    size_t i;
+    unsigned int blocksize; /* enc block size, not confounder len */
+    unsigned int tagsize, cipherlen = 0;
+
+    /* E(Confounder | Plaintext | Pad) | TAG */
+
+    blocksize = ktp->crypto_length(ktp, KRB5_CRYPTO_TYPE_PADDING);
+    tagsize = ktp->crypto_length(ktp, KRB5_CRYPTO_TYPE_TRAILER);
+
+    // TODO: GCM doesn't require any padding
+    if (blocksize != 0) {
+        /* Check that the input data is correctly padded. */
+        for (i = 0; i < num_data; i++) {
+            const krb5_crypto_iov *iov = &data[i];
+
+            if (ENCRYPT_DATA_IOV(iov))
+                cipherlen += iov->data.length;
+        }
+        if (cipherlen % blocksize != 0)
+            return KRB5_BAD_MSIZE;
+    }
+
+    /* Validate header and trailer lengths */
+
+    header = krb5int_c_locate_iov(data, num_data, KRB5_CRYPTO_TYPE_HEADER);
+    if (header == NULL || header->data.length != enc->block_size)
+        return KRB5_BAD_MSIZE;
+
+    trailer = krb5int_c_locate_iov(data, num_data, KRB5_CRYPTO_TYPE_TRAILER);
+    if (trailer == NULL || trailer->data.length != tagsize)
+        return KRB5_BAD_MSIZE;
+
+    /* Derive the keys. */
+
+    d1.data = (char *)constantdata;
+    d1.length = K5CLENGTH;
+
+    store_32_be(usage, constantdata);
+
+    d1.data[4] = 0xAA;
+
+    ret = krb5int_derive_key(enc, key, &ke, &d1, DERIVE_RFC3961);
+    if (ret != 0)
+        goto cleanup;
+
+    d1.data[4] = 0x55;
+
+    /* Decrypt the plaintext (header | data | padding). */
+    ret = enc->decrypt(ke, ivec, data, num_data);
+    if (ret != 0)
+        goto cleanup;
+
+cleanup:
+    krb5_k_free_key(NULL, ke);
     return ret;
 }

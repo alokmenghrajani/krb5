@@ -145,6 +145,19 @@ const struct krb5_keytypes krb5int_enctypes_list[] = {
       CKSUMTYPE_HMAC_SHA1_96_AES256,
       0 /*flags*/ },
 
+#ifdef CRYPTO_IMPL_OPENSSL
+    { ENCTYPE_AES256_GCM,
+      "aes256-gcm", { 0 },
+      "AES-256 GCM",
+      &krb5int_enc_aes256_gcm, NULL,
+      16,
+      krb5int_aes_gcm_crypto_length, krb5int_dk_gcm_encrypt, krb5int_dk_gcm_decrypt,
+      krb5int_aes_string_to_key, k5_rand2key_direct,
+      krb5int_dk_prf,
+      CKSUMTYPE_AES256_GCM,
+      0 /*flags*/ },
+#endif
+
     { ENCTYPE_CAMELLIA128_CTS_CMAC,
       "camellia128-cts-cmac", { "camellia128-cts" },
       "Camellia-128 CTS mode with CMAC",

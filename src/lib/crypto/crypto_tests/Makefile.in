@@ -14,6 +14,7 @@ EXTRADEPSRCS=\
 	$(srcdir)/t_cts.c	\
 	$(srcdir)/vectors.c	\
 	$(srcdir)/aes-test.c	\
+	$(srcdir)/aes_gcm-test.c	\
 	$(srcdir)/camellia-test.c	\
 	$(srcdir)/t_cf2.c	\
 	$(srcdir)/t_cksum.c	\
@@ -34,6 +35,7 @@ EXTRADEPSRCS=\
 check-unix:: t_nfold t_encrypt t_decrypt t_prf t_prng t_cmac t_hmac \
 		t_cksum4 t_cksum5 t_cksums \
 		aes-test  \
+		aes_gcm-test  \
 		camellia-test  \
 		t_mddriver4 t_mddriver \
 		t_crc t_cts t_short t_str2key t_derive t_fork t_cf2
@@ -51,6 +53,7 @@ check-unix:: t_nfold t_encrypt t_decrypt t_prf t_prng t_cmac t_hmac \
 	$(RUN_SETUP) $(VALGRIND) ./t_crc
 	$(RUN_SETUP) $(VALGRIND) ./t_cts
 	$(RUN_SETUP) $(VALGRIND) ./aes-test -k > vk.txt
+	$(RUN_SETUP) $(VALGRIND) ./aes_gcm-test
 	cmp vk.txt $(srcdir)/expect-vk.txt
 	$(RUN_SETUP) $(VALGRIND) ./aes-test > vt.txt
 	cmp vt.txt $(srcdir)/expect-vt.txt
@@ -122,6 +125,9 @@ t_crc: t_crc.o $(KRB5_BASE_DEPLIBS)
 aes-test: aes-test.$(OBJEXT) $(KRB5_BASE_DEPLIBS)
 	$(CC_LINK) -o aes-test aes-test.$(OBJEXT) $(KRB5_BASE_LIBS)
 
+aes_gcm-test: aes_gcm-test.$(OBJEXT) $(KRB5_BASE_DEPLIBS)
+	$(CC_LINK) -o aes_gcm-test aes_gcm-test.$(OBJEXT) $(KRB5_BASE_LIBS)
+
 camellia-test: camellia-test.$(OBJEXT) $(CRYPTO_DEPLIB)
 	$(CC_LINK) -o camellia-test camellia-test.$(OBJEXT) $(KRB5_BASE_LIBS)
 
@@ -153,8 +159,8 @@ clean::
 	$(RM) t_nfold.o t_nfold t_encrypt t_encrypt.o \
 		t_decrypt.o t_decrypt t_prng.o t_prng t_cmac.o t_cmac \
 		t_hmac.o t_hmac t_pkcs5.o t_pkcs5 pbkdf2.o t_prf t_prf.o \
-		aes-test.o aes-test vt.txt vk.txt kresults.out \
-		t_crc.o t_crc t_cts.o t_cts \
+		aes-test.o aes-test aes_gcm-test.o aes_gcm-test vt.txt vk.txt \
+		kresults.out t_crc.o t_crc t_cts.o t_cts \
 		t_mddriver4.o t_mddriver4 t_mddriver.o t_mddriver \
 		t_cksum4 t_cksum4.o t_cksum5 t_cksum5.o t_cksums t_cksums.o \
 		t_kperf.o t_kperf t_short t_short.o t_str2key t_str2key.o \
